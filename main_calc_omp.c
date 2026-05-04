@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-//#include <omp.h>
+#include <omp.h>
 
 #define STATION_COUNT 13
 #define MAX_RECORDS 600000
@@ -32,27 +32,27 @@ char *paths[STATION_COUNT] = {
     path_Funkturm_1, path_Tegel_2, path_FB_1, path_Mueggelsee_1,
     /*path_FB_2,*/ path_Moabit_1};
 
-// Datatyp for the importent Data
+// Datatype for the important Data
 typedef struct
 {
     int y, m, d, h, min;
     float temp;
 } WeatherRecord;
 
-// Datatyp that saves the data and the "id"
+// Datatype that saves the data and the "id"
 typedef struct
 {
     WeatherRecord *records;
     int count;
 } WeatherData;
 
-// Datatyp to know the neighbors
+// Datatype defining neighbors
 typedef struct
 {
     int north, east, south, west;
 } Neighbors;
 
-// all neighbors
+// all neighbors hardcoded
 Neighbors neighbors[STATION_COUNT] = {
     {6, -1, 4, -1},  // 0
     {8, 10, -1, 4},  // 1
@@ -89,37 +89,39 @@ WeatherData load_csv(const char *path)
         return (WeatherData){NULL, 0};
     }
 
-    char line[2048];
+    char line[2048]; // buffer for one row of data at a time
     int count = 0;
 
     // Read lines; skip header/comment lines starting with '#' or empty lines
     while (fgets(line, sizeof(line), f))
     {
-        // skip comments or empty lines
+        
         char *p = line;
+        // skip white space
         while (*p == ' ' || *p == '\t')
             p++;
+        // skip irrelevant lines
         if (*p == '\n' || *p == '\0' || *p == '#')
             continue;
 
         // Try parsing with both ';' and ',' delimiters
         WeatherRecord r;
-        int fields = 0;
+        int cells = 0;
 
         // Try semicolon-separated first
-        fields = sscanf(line, "%d;%d;%d;%d;%d;%f", &r.y, &r.m, &r.d, &r.h, &r.min, &r.temp);
-        if (fields != 6)
+        cells = sscanf(line, "%d;%d;%d;%d;%d;%f", &r.y, &r.m, &r.d, &r.h, &r.min, &r.temp);
+        if (cells != 6)
         {
             // Try comma-separated
-            fields = sscanf(line, "%d,%d,%d,%d,%d,%f", &r.y, &r.m, &r.d, &r.h, &r.min, &r.temp);
+            cells = sscanf(line, "%d,%d,%d,%d,%d,%f", &r.y, &r.m, &r.d, &r.h, &r.min, &r.temp);
         }
         // If still not parsed, try more tolerant parsing (spaces)
-        if (fields != 6)
+        if (cells != 6)
         {
-            fields = sscanf(line, "%d %d %d %d %d %f", &r.y, &r.m, &r.d, &r.h, &r.min, &r.temp);
+            cells = sscanf(line, "%d %d %d %d %d %f", &r.y, &r.m, &r.d, &r.h, &r.min, &r.temp);
         }
-
-        if (fields == 6)
+        // success case
+        if (cells == 6)
         {   //debug nan error (show faulty temperatures)
             if (!isfinite(r.temp))
             {
@@ -160,7 +162,7 @@ WeatherData load_csv(const char *path)
     WeatherRecord *final_rec = realloc(rec, sizeof(WeatherRecord) * count);
     if (final_rec == NULL)
     {
-        fprintf(stderr, "WARNUNG: Reallocation failed, using original buffer.\n");
+        fprintf(stderr, "WARNING: Reallocation failed, using original buffer.\n");
         final_rec = rec;
     }
 
@@ -168,13 +170,13 @@ WeatherData load_csv(const char *path)
 }
 
 // calculate the local temps
-void compute_local(float *local, WeatherData *d)
+void compute_local(float *local, WeatherData *d) // "returns" to local[], pointer to current WeatherData
 {
     if (d->count > 0)
     {
         local[0] = 0.0f; // start value
 
-        // difference between old value and new value
+        // difference between previous and current value
         for (int i = 1; i < d->count; i++)
         {
             local[i] = d->records[i].temp - d->records[i - 1].temp;
@@ -182,7 +184,7 @@ void compute_local(float *local, WeatherData *d)
     }
 }
 
-// calculate the temps between the neighbours
+// calculate the averages between the neighbors
 void compute_final(float *final, float *local[], WeatherData data[], int station_id, Neighbors neigh[])
 {
     int my_len = data[station_id].count;
@@ -238,13 +240,13 @@ void write_csv(const char *name, float *final, WeatherData *src)
     FILE *f = fopen(outname, "w");
     if (!f)
     {
-        perror("Ausgabedatei Fehler");
+        perror("error output file");
         return;
     }
 
     // first line of the csv file
     fprintf(f, "year,month,day,hour,minute,temp_change\n");
-    fprintf(f, "# begin of data\n");
+    fprintf(f, "# start of data\n");
 
     // write the data in the file
     for (int i = 0; i < src->count; i++)
@@ -263,7 +265,7 @@ int main()
     WeatherData data[STATION_COUNT];
     float *local[STATION_COUNT];
     float *final[STATION_COUNT];
-    int rec_count = -1; // Should check consistency
+    int rec_count = -1; 
 
     // initialize pointers to NULL to make cleanup safe
     for (int i = 0; i < STATION_COUNT; i++)
@@ -281,17 +283,7 @@ int main()
         printf("Station %d are being read: %s\n", i, paths[i]);
 
         data[i] = load_csv(paths[i]);
-        // debug nan error
-        /*
-        for (int k = 0; k < data[i].count; k++)
-        {
-            if (!isfinite(data[i].records[k].temp))
-            {
-                printf("BAD TEMP: station=%d index=%d temp=%f\n",
-                    i, k, data[i].records[k].temp);
-            }
-        }
-        */
+
         if (data[i].count == 0 || data[i].records == NULL)
         {
             fprintf(stderr, "critical Error: Station %d couldn't be read or it is empty. abort.\n", i);
@@ -307,17 +299,19 @@ int main()
             }
             return 1;
         }
-
-        // strict consistency check
         if (rec_count == -1)
         {
-            printf("Consistency check successful\n");
             rec_count = data[i].count;
         }
-        /*
-        local[i] = malloc(sizeof(float) * data[i].count);
-        final[i] = malloc(sizeof(float) * data[i].count);
-        */
+        /* Making sure that we're comparing the current station's value to the corresponding
+        neighbor stations.*/
+        else if (rec_count != data[i].count)
+        {
+            fprintf(stderr,
+            "Warning: Station %d has %d records, expected %d. Results may be misaligned.\n", i, data[i].count, rec_count);
+        }
+
+
         local[i] = calloc(data[i].count, sizeof(float));
         final[i] = calloc(data[i].count, sizeof(float));
 
@@ -356,7 +350,7 @@ int main()
             compute_final(final[i], local, data, i, neighbors);
         }
 
-        // print results (only one thread prints)
+        // print results (main thread prints)
 #pragma omp single
         printf("print results...\n");
 
